@@ -23,13 +23,21 @@ export default function Login() {
     setErrorMsg("");
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { shouldCreateUser: false },
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: window.location.origin,
+      },
     });
     if (error) {
       setStatus("error");
-      // Supabase's error message here doesn't reveal whether the email
-      // exists, which is good — we don't want to leak who's on the list.
-      setErrorMsg("Couldn't send a link. If you were invited, try again in a moment.");
+      console.error("[login]", error);
+      if (error.message?.includes("only request this after")) {
+        setErrorMsg("Too many attempts — wait a minute and try again.");
+      } else if (error.message?.toLowerCase().includes("redirect")) {
+        setErrorMsg("Redirect URL not allowed. Add this site to Supabase → Auth → URL Configuration.");
+      } else {
+        setErrorMsg("Couldn't send a link. If you were invited, try again in a moment.");
+      }
       return;
     }
     setStatus("sent");
