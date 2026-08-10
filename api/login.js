@@ -1,10 +1,12 @@
 import {
+  getLoginSecret,
   getServerSupabaseConfigError,
   supabaseAdmin,
   supabaseAnonServer,
 } from "./supabaseClients.js";
+import { deriveLoginPassword } from "./loginPassword.js";
 
-const callLog = new Map(); // ip-ish key -> [timestamps]
+const callLog = new Map();
 const MAX_ATTEMPTS_PER_HOUR = 20;
 
 function clientKey(req) {
@@ -26,14 +28,22 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
-function isUserNotFound(error) {
-  const msg = (error?.message || "").toLowerCase();
-  return (
-    msg.includes("user not found") ||
-    msg.includes("not found") ||
-    msg.includes("no user") ||
-    error?.code === "user_not_found"
-  );
+async function findUserByEmail(email) {
+  let page = 1;
+  const perPage = 200;
+
+  while (page <= 10) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+
+    const user = data.users.find((u) => u.email?.toLowerCase() === email);
+    if (user) return user;
+
+    if (data.users.length < perPage) return null;
+    page += 1;
+  }
+
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -58,34 +68,37 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
-      type: "magiclink",
+    const user = await findUserByEmail(email);
+    if (!user) {
+      return res.status(403).json({ error: "You haven't been invited yet. Ask the admin to add your email." });
+    }
+
+    const password = deriveLoginPassword(email, getLoginSecret());
+
+    let { data: sessionData, error: signInError } = await supabaseAnonServer.auth.signInWithPassword({
       email,
+      password,
     });
 
-    if (linkError) {
-      if (isUserNotFound(linkError)) {
-        return res.status(403).json({ error: "You haven't been invited yet. Ask the admin to add your email." });
+    // Users added before passwords were set (createUser without password) — set it once and retry.
+    if (signInError) {
+      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
+        password,
+        email_confirm: true,
+      });
+      if (updateError) {
+        console.error("[api/login] updateUserById:", updateError.message);
+        return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
       }
-      console.error("[api/login] generateLink:", linkError.message, linkError.code);
-      return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
+
+      ({ data: sessionData, error: signInError } = await supabaseAnonServer.auth.signInWithPassword({
+        email,
+        password,
+      }));
     }
 
-    const tokenHash = linkData?.properties?.hashed_token;
-    if (!tokenHash) {
-      console.error("[api/login] missing hashed_token from generateLink");
-      return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
-    }
-
-    const otpType = linkData.properties?.verification_type || "magiclink";
-
-    const { data: sessionData, error: verifyError } = await supabaseAnonServer.auth.verifyOtp({
-      token_hash: tokenHash,
-      type: otpType,
-    });
-
-    if (verifyError || !sessionData?.session) {
-      console.error("[api/login] verifyOtp:", verifyError?.message, verifyError?.code);
+    if (signInError || !sessionData?.session) {
+      console.error("[api/login] signInWithPassword:", signInError?.message, signInError?.code);
       return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
     }
 

@@ -13,9 +13,9 @@ npm run invite -- someone@example.com
 ```
 
 This creates the user in Supabase **without sending email**. On the login
-screen they enter that same address — the app checks the allowlist server-side
-(`api/login.js`) and signs them in immediately if they're registered. Unknown
-emails get: *"You haven't been invited yet."*
+screen they enter that same address and click **Continue** — the app checks
+the allowlist server-side (`api/login.js`) and signs them in immediately.
+Unknown emails get: *"You haven't been invited yet."*
 
 **Note:** Sign-in only checks that the email is on the allowlist — there is
 no second factor (no magic link, no password). Fine for a small trusted group;
