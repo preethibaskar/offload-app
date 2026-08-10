@@ -61,6 +61,9 @@ just test the AI sort feature after deploying.
    - `VITE_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `ANTHROPIC_API_KEY`
+   **Important:** Vite embeds `VITE_*` vars at build time. After adding or
+   changing them, you must **Redeploy** (Deployments → Redeploy) — saving
+   env vars alone is not enough.
 4. Deploy. You'll get a URL like `offload-yourname.vercel.app`.
 5. Invite people:
    ```
