@@ -1,9 +1,4 @@
-import {
-  getLoginSecret,
-  getServerSupabaseConfigError,
-  supabaseAdmin,
-  supabaseAnonServer,
-} from "./supabaseClients.js";
+import { createServerClients, getLoginSecret, getServerSupabaseConfigError } from "./supabaseClients.js";
 import { deriveLoginPassword } from "./loginPassword.js";
 
 const callLog = new Map();
@@ -28,18 +23,28 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
-async function findUserByEmail(email) {
+async function findUserIdByEmail(url, serviceRoleKey, email) {
   let page = 1;
   const perPage = 200;
 
   while (page <= 10) {
-    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
-    if (error) throw error;
+    const res = await fetch(`${url}/auth/v1/admin/users?page=${page}&per_page=${perPage}`, {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+    });
 
-    const user = data.users.find((u) => u.email?.toLowerCase() === email);
-    if (user) return user;
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`admin listUsers failed (${res.status}): ${body}`);
+    }
 
-    if (data.users.length < perPage) return null;
+    const payload = await res.json();
+    const users = payload.users || [];
+    const match = users.find((u) => u.email?.toLowerCase() === email);
+    if (match) return match.id;
+    if (users.length < perPage) return null;
     page += 1;
   }
 
@@ -52,7 +57,8 @@ export default async function handler(req, res) {
   }
 
   const configError = getServerSupabaseConfigError();
-  if (configError || !supabaseAdmin || !supabaseAnonServer) {
+  const { supabaseAdmin, supabaseAnonServer, url, serviceRoleKey } = createServerClients();
+  if (configError || !supabaseAdmin || !supabaseAnonServer || !url || !serviceRoleKey) {
     console.error("[api/login] config:", configError);
     return res.status(503).json({ error: "Server auth is not configured. Contact the admin." });
   }
@@ -68,11 +74,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    const user = await findUserByEmail(email);
-    if (!user) {
-      return res.status(403).json({ error: "You haven't been invited yet. Ask the admin to add your email." });
-    }
-
     const password = deriveLoginPassword(email, getLoginSecret());
 
     let { data: sessionData, error: signInError } = await supabaseAnonServer.auth.signInWithPassword({
@@ -80,9 +81,13 @@ export default async function handler(req, res) {
       password,
     });
 
-    // Users added before passwords were set (createUser without password) — set it once and retry.
-    if (signInError) {
-      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
+    if (signInError || !sessionData?.session) {
+      const userId = await findUserIdByEmail(url, serviceRoleKey, email);
+      if (!userId) {
+        return res.status(403).json({ error: "You haven't been invited yet. Ask the admin to add your email." });
+      }
+
+      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
         password,
         email_confirm: true,
       });

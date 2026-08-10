@@ -60,10 +60,10 @@ Note: `npm run dev` wires up `/api/login` and `/api/sort` locally via
 
 1. Push this repo to GitHub.
 2. Import it into Vercel (vercel.com → New Project → your repo).
-3. In the Vercel project's **Environment Variables**, add:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY`
+3. In the Vercel project's **Environment Variables**, add for **Production**:
+   - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (used by the frontend build)
+   - `SUPABASE_SERVICE_ROLE_KEY` (used by `/api/login` and `/api/sort`)
+   - Recommended for API routes (same values as above): `SUPABASE_URL`, `SUPABASE_ANON_KEY`
    - `ANTHROPIC_API_KEY`
    **Important:** Vite embeds `VITE_*` vars at build time. After adding or
    changing them, you must **Redeploy** (Deployments → Redeploy) — saving

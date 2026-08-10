@@ -1,6 +1,6 @@
 import { buildSortPrompt } from "../shared/sortPrompt.js";
 import { computeCapacitySnapshot, normalizePreferences } from "../shared/preferences.js";
-import { getServerSupabaseConfigError, supabaseAdmin } from "./supabaseClients.js";
+import { getServerSupabaseConfigError, createServerClients } from "./supabaseClients.js";
 
 // This runs on the server (Vercel), never in the browser. The Anthropic API
 // key below is read from an environment variable set in the Vercel project
@@ -27,6 +27,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const { supabaseAdmin } = createServerClients();
   if (!supabaseAdmin || getServerSupabaseConfigError()) {
     return res.status(503).json({ error: "Server auth is not configured." });
   }
