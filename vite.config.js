@@ -4,14 +4,21 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Vite only serves the frontend. Wire up /api/* locally so sort works
-// without needing `npx vercel dev`.
+const API_ROUTES = {
+  "/api/sort": () => import("./api/sort.js"),
+  "/api/login": () => import("./api/login.js"),
+};
+
+// Vite only serves the frontend. Wire up /api/* locally so serverless
+// functions work without needing `npx vercel dev`.
 function apiDevPlugin() {
   return {
     name: "api-dev",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (!req.url?.startsWith("/api/sort")) return next();
+        const path = req.url?.split("?")[0];
+        const loadHandler = API_ROUTES[path];
+        if (!loadHandler) return next();
 
         if (req.method !== "POST") {
           res.statusCode = 405;
@@ -24,11 +31,12 @@ function apiDevPlugin() {
         req.on("data", (chunk) => (body += chunk));
         req.on("end", async () => {
           try {
-            const { default: handler } = await import("./api/sort.js");
+            const { default: handler } = await loadHandler();
             const vercelReq = {
               method: req.method,
               headers: req.headers,
               body: JSON.parse(body || "{}"),
+              socket: req.socket,
             };
             const vercelRes = {
               statusCode: 200,
@@ -44,13 +52,13 @@ function apiDevPlugin() {
             };
             await handler(vercelReq, vercelRes);
             if (res.writableEnded === false) {
-              console.error("[api/sort] handler did not send a response");
+              console.error(`[${path}] handler did not send a response`);
               res.statusCode = 500;
               res.setHeader("Content-Type", "application/json");
               res.end(JSON.stringify({ error: "Internal server error" }));
             }
           } catch (err) {
-            console.error("[api/sort]", err);
+            console.error(`[${path}]`, err);
             res.statusCode = 500;
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ error: "Internal server error" }));

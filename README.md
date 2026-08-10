@@ -6,17 +6,20 @@ and Claude sorts it into Today / This Week / Someday / Waiting On.
 ## How access control works
 
 There is no public sign-up form. Accounts only exist if you (the admin)
-create them:
+add them:
 
 ```
 npm run invite -- someone@example.com
 ```
 
-This uses Supabase's admin API to create the user and email them a
-sign-in link. The login screen (`src/components/Login.jsx`) also passes
-`shouldCreateUser: false`, so even if someone types in a random email,
-Supabase refuses to create an account or send a link for it — invite is
-the *only* way in.
+This creates the user in Supabase **without sending email**. On the login
+screen they enter that same address — the app checks the allowlist server-side
+(`api/login.js`) and signs them in immediately if they're registered. Unknown
+emails get: *"You haven't been invited yet."*
+
+**Note:** Sign-in only checks that the email is on the allowlist — there is
+no second factor (no magic link, no password). Fine for a small trusted group;
+don't use this model for open/public apps.
 
 ## One-time setup
 
@@ -33,7 +36,7 @@ the *only* way in.
    `ANTHROPIC_API_KEY` from console.anthropic.com.
 5. (Optional, extra safety) In Supabase **Authentication → Settings**,
    turn off "Allow new users to sign up" so account creation is only
-   ever possible through the admin invite API.
+   ever possible through `npm run invite`.
 
 ## Local development
 
@@ -42,15 +45,16 @@ npm install
 npm run dev
 ```
 
-Invite yourself first so you have something to log in with:
+Add yourself first so you have something to log in with:
 
 ```
 npm run invite -- you@example.com
 ```
 
-Note: `npm run dev` serves the frontend only. The `/api/sort` serverless
-function needs the Vercel CLI to run locally (`npx vercel dev`) or you can
-just test the AI sort feature after deploying.
+Then open the app, enter that email, and click **Continue**.
+
+Note: `npm run dev` wires up `/api/login` and `/api/sort` locally via
+`vite.config.js`. For full Vercel parity you can also use `npx vercel dev`.
 
 ## Deploying
 
@@ -65,11 +69,11 @@ just test the AI sort feature after deploying.
    changing them, you must **Redeploy** (Deployments → Redeploy) — saving
    env vars alone is not enough.
 4. Deploy. You'll get a URL like `offload-yourname.vercel.app`.
-5. Invite people:
+5. Add people (no email sent):
    ```
    npm run invite -- friend@example.com
    ```
-   They'll get an email with a link that signs them straight in.
+   Share your app URL — they sign in with that email on the login screen.
 
 ## Testing sort accuracy
 

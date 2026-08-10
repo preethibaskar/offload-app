@@ -1,14 +1,10 @@
-import { createClient } from "@supabase/supabase-js";
 import { buildSortPrompt } from "../shared/sortPrompt.js";
 import { computeCapacitySnapshot, normalizePreferences } from "../shared/preferences.js";
+import { supabaseAdmin } from "./supabaseAdmin.js";
 
 // This runs on the server (Vercel), never in the browser. The Anthropic API
 // key below is read from an environment variable set in the Vercel project
 // dashboard — it never appears in any file the browser downloads.
-const supabaseAdmin = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 // Very small in-memory rate limit: resets whenever the function cold-starts,
 // so it's not a hard guarantee, but it stops a single runaway client from
