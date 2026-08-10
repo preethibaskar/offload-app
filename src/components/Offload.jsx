@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import {
   Sparkles, Plus, X, Check, Clock, CalendarDays, History, Loader2,
-  ChevronUp, ChevronDown, Calendar, Repeat, Bell, BarChart3, Trash2, Mic, Square, Filter, Sunrise
+  ChevronUp, ChevronDown, Calendar, Repeat, Bell, BarChart3, Trash2, Mic, Square, Filter, Sunrise, Settings
 } from "lucide-react";
 import { storage } from "../lib/storage";
 import { supabase } from "../supabaseClient";
@@ -11,6 +11,11 @@ import {
   addDaysToKey, promoteByDueDate, rolloverFromYesterday, itemsChanged,
   normalizeCategory, ensureDue, backfillItem, resurfaceSomedayItems, defaultDueForCategory,
 } from "../lib/dayRollover";
+import { filterDuplicates, isDuplicateOfExisting } from "../lib/dedup";
+import { applyCapacityPlan } from "../lib/capacity";
+import { PREFERENCE_KEY, DEFAULT_PREFERENCES, normalizePreferences } from "../../shared/preferences.js";
+import { parseSortResponse } from "../../shared/sortPrompt.js";
+import PreferencesPanel from "./PreferencesPanel";
 
 const CATS = [
   { id: "today", label: "Today", icon: Check },
@@ -109,8 +114,14 @@ export default function Offload() {
   const [tagFilters, setTagFilters] = useState([]);
   const [carryOverNudge, setCarryOverNudge] = useState(null);
   const [resurfaceNudge, setResurfaceNudge] = useState(null);
+  const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [sortNudge, setSortNudge] = useState(null);
   const loadIdRef = useRef(0);
   const dumpRef = useRef("");
+  const itemsRef = useRef([]);
+  const preferencesRef = useRef(DEFAULT_PREFERENCES);
 
   // Fire-and-forget: writes to the `corrections` table (see supabase/schema.sql).
   const logCorrection = useCallback(({ text, aiCategory, correctedCategory }) => {
@@ -135,14 +146,49 @@ export default function Offload() {
     dumpRef.current = dump;
   }, [dump]);
 
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    preferencesRef.current = preferences;
+  }, [preferences]);
+
+  const loadPreferences = useCallback(async () => {
+    try {
+      const res = await storage.get(PREFERENCE_KEY);
+      if (res?.value) {
+        setPreferences(normalizePreferences(JSON.parse(res.value)));
+      }
+    } catch {
+      /* use defaults */
+    }
+    setPreferencesLoaded(true);
+  }, []);
+
+  useEffect(() => { loadPreferences(); }, [loadPreferences]);
+
+  const savePreferences = useCallback(async (nextPrefs) => {
+    const normalized = normalizePreferences(nextPrefs);
+    setPreferences(normalized);
+    try {
+      await storage.set(PREFERENCE_KEY, JSON.stringify(normalized));
+    } catch {
+      setError("Couldn't save preferences.");
+    }
+  }, []);
+
   const sortDump = useCallback(async (textOverride) => {
     const dumpText = (textOverride ?? dumpRef.current).trim();
     if (!dumpText) return;
     setSorting(true);
     setError("");
+    setSortNudge(null);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
+      const openItems = itemsRef.current.filter((it) => !it.done);
+      const prefs = preferencesRef.current;
 
       const response = await fetch("/api/sort", {
         method: "POST",
@@ -150,19 +196,26 @@ export default function Offload() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ dump: dumpText }),
+        body: JSON.stringify({
+          dump: dumpText,
+          existingItems: openItems.map((it) => ({
+            text: it.text,
+            category: it.category,
+            tags: it.tags,
+            done: it.done,
+          })),
+          preferences: prefs,
+          planDay: dateKey,
+        }),
       });
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error(err.error || "Sort request failed");
       }
       const data = await response.json();
-      const text = (data.content || []).map((b) => b.text || "").join("").trim();
-      const clean = text.replace(/^```json\s*|^```\s*|```$/g, "").trim();
-      const parsed = JSON.parse(clean);
-      const newItems = parsed
+      const parsed = parseSortResponse(data)
         .filter((p) => p && p.text)
-        .map((p) => newTask({
+        .map((p) => ({
           text: p.text,
           category: p.category,
           tags: p.tags,
@@ -171,16 +224,36 @@ export default function Offload() {
           aiOriginalCategory: CATS.some((c) => c.id === normalizeCategory(p.category))
             ? normalizeCategory(p.category)
             : "week",
-        }, dateKey));
+        }));
+
+      const { unique, skipped } = filterDuplicates(parsed, openItems);
+      const { items: capacityPlanned, deferred } = applyCapacityPlan(
+        unique,
+        openItems,
+        prefs,
+        dateKey
+      );
+
+      const newItems = capacityPlanned.map((p) => newTask(p, dateKey));
+
       if (newItems.length === 0) {
+        if (skipped.length > 0) {
+          setSortNudge({ skipped: skipped.length, deferred: [] });
+          setDump("");
+          return;
+        }
         console.warn("[sort] API returned no items. Raw response:", data);
         throw new Error("Sort returned no items — try again.");
       }
+
       setItems((prev) => [...prev, ...newItems]);
       const landing = {};
       newItems.forEach((it) => (landing[it.id] = true));
       setJustLanded(landing);
       setTimeout(() => setJustLanded({}), 900);
+      if (skipped.length > 0 || deferred.length > 0) {
+        setSortNudge({ skipped: skipped.length, deferred });
+      }
       setDump("");
     } catch (err) {
       setError(err.message || "Couldn't sort that dump — try again in a moment.");
@@ -468,7 +541,15 @@ export default function Offload() {
 
   const submitAdd = (category) => {
     if (!addText.trim()) { setAddingTo(null); return; }
-    setItems((prev) => [...prev, newTask({ text: addText.trim(), category }, dateKey)]);
+    const text = addText.trim();
+    const openItems = items.filter((it) => !it.done);
+    if (isDuplicateOfExisting(text, openItems)) {
+      setError("That item is already on your list.");
+      setAddText("");
+      setAddingTo(null);
+      return;
+    }
+    setItems((prev) => [...prev, newTask({ text, category }, dateKey)]);
     setAddText("");
     setAddingTo(null);
   };
@@ -578,6 +659,7 @@ export default function Offload() {
         .recur-btn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft);
           background: var(--paper-raised); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
         .recur-btn:hover { color: var(--ink); border-color: var(--ink-soft); }
+        .recur-btn.active { background: var(--today-bg); color: var(--today); border-color: var(--today); }
 
         .gap-filters { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px;
           padding: 12px 14px; margin-bottom: 18px; }
@@ -666,6 +748,30 @@ export default function Offload() {
         .rec-form select { font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 6px; background: var(--paper-raised); }
         .rec-form button { border: none; background: var(--ink); color: var(--paper); border-radius: 6px; padding: 0 12px; cursor: pointer; font-size: 13px; }
 
+        .prefs-panel { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+        .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .prefs-head h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+        .prefs-close { border: none; background: none; cursor: pointer; color: var(--ink-soft); padding: 4px; border-radius: 4px; }
+        .prefs-close:hover { color: var(--ink); background: var(--paper); }
+        .prefs-desc { font-size: 12px; color: var(--ink-soft); margin: 0 0 14px; line-height: 1.45; }
+        .prefs-usage { background: var(--paper); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+        .prefs-usage-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; font-size: 12px; margin-bottom: 8px; }
+        .prefs-usage-row:last-child { margin-bottom: 0; }
+        .prefs-usage-val { font-family: 'IBM Plex Mono', monospace; color: var(--ink-soft); font-size: 11px; }
+        .prefs-usage-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+        .prefs-usage-fill { height: 100%; background: var(--today); border-radius: 2px; }
+        .prefs-fields { display: grid; gap: 10px; margin-bottom: 14px; }
+        .prefs-field { display: grid; grid-template-columns: 1fr 72px auto; gap: 8px; align-items: center; font-size: 13px; }
+        .prefs-field input { font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-family: 'IBM Plex Mono', monospace; background: var(--paper-raised); }
+        .prefs-unit { font-size: 11px; color: var(--ink-soft); }
+        .prefs-save { border: none; background: var(--ink); color: var(--paper); border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .prefs-save:hover { opacity: 0.9; }
+
+        .sort-nudge-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          background: var(--week-bg); color: var(--week); border-radius: 10px; padding: 10px 14px;
+          font-size: 13px; margin-bottom: 18px; flex-wrap: wrap; }
+        .sort-nudge-banner b { font-weight: 700; }
+
         .week-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
         .week-card { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 14px 10px; cursor: pointer; text-align: center; }
         .week-card:hover { border-color: var(--ink-soft); }
@@ -691,6 +797,20 @@ export default function Offload() {
           </div>
         </div>
         <p className="offload-sub">Get it out of your head. Sort it once. Let the trays hold it.</p>
+
+        {view === "day" && sortNudge && (
+          <div className="sort-nudge-banner">
+            <span>
+              {sortNudge.skipped > 0 && (
+                <><b>{sortNudge.skipped}</b> {sortNudge.skipped === 1 ? "item" : "items"} already on your list — skipped. </>
+              )}
+              {sortNudge.deferred?.length > 0 && (
+                <><b>{sortNudge.deferred.length}</b> moved from Today to fit your daily capacity.</>
+              )}
+            </span>
+            <button type="button" className="carryover-btn" onClick={() => setSortNudge(null)}>Got it</button>
+          </div>
+        )}
 
         {view === "day" && resurfaceNudge && (
           <div className="resurface-banner">
@@ -758,7 +878,7 @@ export default function Offload() {
                   <button
                     className="sort-btn"
                     onClick={() => { stopVoice(); sortDump(); }}
-                    disabled={sorting || !loaded || !dump.trim()}
+                    disabled={sorting || !loaded || !preferencesLoaded || !dump.trim()}
                   >
                     {sorting ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
                     {sorting ? "Sorting" : "Sort it out"}
@@ -771,7 +891,22 @@ export default function Offload() {
               <button className="recur-btn" onClick={() => setRecurringOpen(!recurringOpen)}>
                 <Repeat size={13} />Recurring items{recurring.length > 0 ? ` (${recurring.length})` : ""}
               </button>
+              <button
+                className={`recur-btn ${preferencesOpen ? "active" : ""}`}
+                onClick={() => setPreferencesOpen(!preferencesOpen)}
+              >
+                <Settings size={13} />Daily capacity
+              </button>
             </div>
+
+            {preferencesOpen && preferencesLoaded && (
+              <PreferencesPanel
+                preferences={preferences}
+                onSave={savePreferences}
+                todayItems={items}
+                onClose={() => setPreferencesOpen(false)}
+              />
+            )}
 
             {recurringOpen && (
               <div className="rec-panel">

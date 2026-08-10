@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { buildSortPrompt } from "../shared/sortPrompt.js";
+import { computeCapacitySnapshot, normalizePreferences } from "../shared/preferences.js";
 
 // This runs on the server (Vercel), never in the browser. The Anthropic API
 // key below is read from an environment variable set in the Vercel project
@@ -47,12 +48,23 @@ export default async function handler(req, res) {
     return res.status(429).json({ error: "Rate limit exceeded, try again later" });
   }
 
-  const { dump } = req.body || {};
+  const { dump, existingItems, preferences, planDay } = req.body || {};
   if (!dump || !dump.trim()) {
     return res.status(400).json({ error: "Empty dump" });
   }
 
-  const prompt = buildSortPrompt(dump);
+  const prefs = normalizePreferences(preferences);
+  const openItems = Array.isArray(existingItems)
+    ? existingItems.filter((it) => it && it.text && !it.done)
+    : [];
+  const capacity = computeCapacitySnapshot(openItems, prefs);
+
+  const prompt = buildSortPrompt(dump, {
+    existingItems: openItems,
+    preferences: prefs,
+    planDay,
+    capacity,
+  });
 
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
