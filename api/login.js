@@ -1,4 +1,8 @@
-import { supabaseAdmin } from "./supabaseAdmin.js";
+import {
+  getServerSupabaseConfigError,
+  supabaseAdmin,
+  supabaseAnonServer,
+} from "./supabaseClients.js";
 
 const callLog = new Map(); // ip-ish key -> [timestamps]
 const MAX_ATTEMPTS_PER_HOUR = 20;
@@ -37,6 +41,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const configError = getServerSupabaseConfigError();
+  if (configError || !supabaseAdmin || !supabaseAnonServer) {
+    console.error("[api/login] config:", configError);
+    return res.status(503).json({ error: "Server auth is not configured. Contact the admin." });
+  }
+
   const key = clientKey(req);
   if (isRateLimited(key)) {
     return res.status(429).json({ error: "Too many sign-in attempts. Try again later." });
@@ -57,7 +67,7 @@ export default async function handler(req, res) {
       if (isUserNotFound(linkError)) {
         return res.status(403).json({ error: "You haven't been invited yet. Ask the admin to add your email." });
       }
-      console.error("[api/login] generateLink:", linkError.message);
+      console.error("[api/login] generateLink:", linkError.message, linkError.code);
       return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
     }
 
@@ -67,13 +77,15 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
     }
 
-    const { data: sessionData, error: verifyError } = await supabaseAdmin.auth.verifyOtp({
+    const otpType = linkData.properties?.verification_type || "magiclink";
+
+    const { data: sessionData, error: verifyError } = await supabaseAnonServer.auth.verifyOtp({
       token_hash: tokenHash,
-      type: "email",
+      type: otpType,
     });
 
     if (verifyError || !sessionData?.session) {
-      console.error("[api/login] verifyOtp:", verifyError?.message);
+      console.error("[api/login] verifyOtp:", verifyError?.message, verifyError?.code);
       return res.status(500).json({ error: "Sign-in failed. Try again in a moment." });
     }
 
