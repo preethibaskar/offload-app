@@ -1,11 +1,10 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import {
   Sparkles, Plus, X, Check, Clock, CalendarDays, History, Loader2,
-  ChevronUp, ChevronDown, Calendar, Repeat, Bell, BarChart3, Trash2, Mic, Square, Filter, Sunrise, Settings
+  ChevronUp, ChevronDown, Calendar, Repeat, Bell, BarChart3, Trash2, Filter, Sunrise, Settings
 } from "lucide-react";
 import { storage } from "../lib/storage";
 import { supabase } from "../supabaseClient";
-import { useVoiceDump } from "../hooks/useVoiceDump";
 import { ENERGY_TAGS, ensureTags, itemMatchesTagFilters, tagById } from "../lib/energyTags";
 import {
   addDaysToKey, promoteByDueDate, rolloverFromYesterday, itemsChanged,
@@ -133,15 +132,6 @@ export default function Offload() {
       });
   }, []);
 
-  const appendToDump = useCallback((text) => {
-    setDump((prev) => {
-      const sep = prev.trim() && !prev.endsWith(" ") ? " " : "";
-      const next = prev + sep + text;
-      dumpRef.current = next;
-      return next;
-    });
-  }, []);
-
   useEffect(() => {
     dumpRef.current = dump;
   }, [dump]);
@@ -260,23 +250,6 @@ export default function Offload() {
     }
     setSorting(false);
   }, [dateKey]);
-
-  const handleVoiceEnd = useCallback((pendingInterim) => {
-    let text = dumpRef.current;
-    if (pendingInterim?.trim()) {
-      const sep = text.trim() && !text.endsWith(" ") ? " " : "";
-      text = text + sep + pendingInterim.trim();
-      dumpRef.current = text;
-      setDump(text);
-    }
-    if (text.trim()) sortDump(text);
-  }, [sortDump]);
-
-  const { listening, interim, supported, toggle: toggleVoice, stop: stopVoice } = useVoiceDump({
-    onTranscript: appendToDump,
-    onError: setError,
-    onEnd: handleVoiceEnd,
-  });
 
   const persistPlan = useCallback(async (key, nextItems, nextDump) => {
     try {
@@ -639,15 +612,7 @@ export default function Offload() {
         .dumpzone-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 10px; flex-wrap: wrap; }
         .dumpzone-hint { font-size: 12px; color: var(--ink-soft); flex: 1; min-width: 140px; }
         .dumpzone-hint em { font-style: normal; color: var(--ink); opacity: 0.7; }
-        .dumpzone-hint.listening { color: var(--waiting); }
         .dumpzone-actions { display: flex; align-items: center; gap: 8px; }
-        .voice-btn { background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px;
-          font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 7px; }
-        .voice-btn:hover { border-color: var(--ink-soft); }
-        .voice-btn.listening { background: var(--waiting-bg); color: var(--waiting); border-color: var(--waiting);
-          animation: offload-pulse 1.4s ease-in-out infinite; }
-        @keyframes offload-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
-        .dumpzone.listening textarea { outline: 2px solid var(--waiting-bg); outline-offset: -2px; }
         .sort-btn { background: var(--ink); color: var(--paper); border: none; border-radius: 8px; padding: 9px 16px;
           font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 7px; }
         .sort-btn:hover:not(:disabled) { transform: translateY(-1px); }
@@ -846,38 +811,22 @@ export default function Offload() {
 
         {view === "day" ? (
           <>
-            <div className={`dumpzone ${listening ? "listening" : ""}`}>
+            <div className="dumpzone">
               <textarea
                 placeholder="Everything on your mind, no order needed — deadlines, errands, half-formed ideas..."
                 value={dump}
                 onChange={(e) => setDump(e.target.value)}
               />
               <div className="dumpzone-footer">
-                <span className={`dumpzone-hint ${listening ? "listening" : ""}`}>
-                  {listening ? (
-                    <>Listening… tap Stop to sort{interim ? <> — <em>{interim}</em></> : null}</>
-                  ) : dump.trim() ? (
-                    `${dump.trim().split(/\s+/).length} words`
-                  ) : (
-                    supported ? "Type or tap Voice dump" : "Empty tray, empty head"
-                  )}
+                <span className="dumpzone-hint">
+                  {dump.trim()
+                    ? `${dump.trim().split(/\s+/).length} words`
+                    : "Empty tray, empty head"}
                 </span>
                 <div className="dumpzone-actions">
-                  {supported && (
-                    <button
-                      type="button"
-                      className={`voice-btn ${listening ? "listening" : ""}`}
-                      onClick={toggleVoice}
-                      disabled={sorting}
-                      title={listening ? "Stop recording" : "Record a voice memo"}
-                    >
-                      {listening ? <Square size={14} /> : <Mic size={14} />}
-                      {listening ? "Stop" : "Voice dump"}
-                    </button>
-                  )}
                   <button
                     className="sort-btn"
-                    onClick={() => { stopVoice(); sortDump(); }}
+                    onClick={() => sortDump()}
                     disabled={sorting || !loaded || !preferencesLoaded || !dump.trim()}
                   >
                     {sorting ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
