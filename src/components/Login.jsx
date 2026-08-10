@@ -31,10 +31,17 @@ export default function Login() {
     if (error) {
       setStatus("error");
       console.error("[login]", error);
-      if (error.message?.includes("only request this after")) {
-        setErrorMsg("Too many attempts — wait a minute and try again.");
-      } else if (error.message?.toLowerCase().includes("redirect")) {
+      const msg = error.message?.toLowerCase() ?? "";
+      if (
+        error.code === "over_email_send_rate_limit" ||
+        msg.includes("rate limit") ||
+        msg.includes("only request this after")
+      ) {
+        setErrorMsg("Too many sign-in attempts — wait a few minutes, then try again.");
+      } else if (msg.includes("redirect")) {
         setErrorMsg("Redirect URL not allowed. Add this site to Supabase → Auth → URL Configuration.");
+      } else if (msg.includes("signups not allowed")) {
+        setErrorMsg("No account for that email. Ask for an invite first.");
       } else {
         setErrorMsg("Couldn't send a link. If you were invited, try again in a moment.");
       }
