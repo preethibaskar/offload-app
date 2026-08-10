@@ -68,6 +68,55 @@ just test the AI sort feature after deploying.
    ```
    They'll get an email with a link that signs them straight in.
 
+## Testing sort accuracy
+
+```
+npm run eval
+```
+
+Runs `eval/dataset.json` (70 hand-labeled examples across all four
+categories) through the exact same prompt `api/sort.js` uses, and prints:
+
+- overall + per-category accuracy
+- a confusion matrix (which categories get mixed up with which)
+- every mismatch, so you can see the actual wrong answers, not just a number
+- response/parse errors, if any
+
+Check consistency (does the model give the same answer to the same input
+every time?) by running more calls per item:
+
+```
+CONSISTENCY_RUNS=3 npm run eval
+```
+
+Re-run this after any prompt change (`shared/sortPrompt.js`) to see whether
+it actually helped. Add new rows to `eval/dataset.json` as you discover
+real-world miscategorizations — that's the highest-value use of this file
+over time.
+
+## Real-world accuracy: correction logging
+
+Whenever someone changes the category the AI assigned to an item, that gets
+logged to the `corrections` table (see `supabase/schema.sql`) with the item
+text, the AI's original category, and what the person corrected it to. This
+is a better accuracy signal than any offline test set, because it's your
+actual users' actual dumps.
+
+To review it, query Supabase directly (SQL editor or table view) — the app
+itself never reads this table back, by design (see the RLS policy comment
+in `schema.sql`). A useful starting query:
+
+```sql
+select ai_category, corrected_category, count(*)
+from corrections
+group by 1, 2
+order by 3 desc;
+```
+
+If a particular `ai_category -> corrected_category` pair keeps showing up,
+that's your next few-shot example to add to the prompt, and a good
+candidate to add to `eval/dataset.json` too.
+
 ## Notes / next steps
 
 - `api/sort.js` has a basic in-memory rate limit (30 sorts/hour/user) to

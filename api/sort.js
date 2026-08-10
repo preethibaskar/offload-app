@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { ENERGY_TAG_IDS } from "../src/lib/energyTags.js";
+import { buildSortPrompt } from "../shared/sortPrompt.js";
 
 // This runs on the server (Vercel), never in the browser. The Anthropic API
 // key below is read from an environment variable set in the Vercel project
@@ -52,20 +52,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Empty dump" });
   }
 
-  const prompt = `You organize a person's raw stream-of-consciousness thought dump into an actionable plan.
-Categories: "today" (must happen today), "tomorrow" (must happen tomorrow), "week" (later this week, not today or tomorrow), "someday" (no urgency, low priority).
-Rules: split into short, concrete, actionable items. Merge near-duplicates. Drop pure filler ("um", "also"). Keep each item under 12 words, written as a task, not a sentence.
-Use "tomorrow" when the dump clearly says tomorrow, next day, or a specific task for the next calendar day. Use "today" for same-day urgency.
-If blocked on someone else, put it in "week" (not a separate category).
-Optionally include "due" as YYYY-MM-DD when the dump mentions a specific date.
-For each item, you MUST include a "tags" array with 1-2 values from this list only: ${ENERGY_TAG_IDS.join(", ")}.
-- Time tags (always pick exactly one): 5min, 15min, 30min, 60min — estimate duration.
-- Energy tags (pick one when it fits): quick-call, needs-focus, low-energy, errand, deep-work.
-Every item needs tags. Never return an item without a tags array.
-Return ONLY a raw JSON array, no markdown fences, no commentary. Format: [{"text":"...","category":"today","tags":["5min","quick-call"]}]
-
-Dump:
-"""${dump}"""`;
+  const prompt = buildSortPrompt(dump);
 
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {

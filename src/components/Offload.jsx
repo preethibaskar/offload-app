@@ -73,6 +73,8 @@ const newTask = (fields, planDayKey) => {
     due: ensureDue(category, planDayKey, fields.due),
     done: fields.done ?? false,
     somedaySince: category === "someday" ? (fields.somedaySince || planDayKey) : undefined,
+    aiSorted: fields.aiSorted ?? false,
+    aiOriginalCategory: fields.aiOriginalCategory,
   };
 };
 
@@ -109,6 +111,16 @@ export default function Offload() {
   const [resurfaceNudge, setResurfaceNudge] = useState(null);
   const loadIdRef = useRef(0);
   const dumpRef = useRef("");
+
+  // Fire-and-forget: writes to the `corrections` table (see supabase/schema.sql).
+  const logCorrection = useCallback(({ text, aiCategory, correctedCategory }) => {
+    supabase
+      .from("corrections")
+      .insert({ item_text: text, ai_category: aiCategory, corrected_category: correctedCategory })
+      .then(({ error }) => {
+        if (error) console.error("Failed to log correction:", error.message);
+      });
+  }, []);
 
   const appendToDump = useCallback((text) => {
     setDump((prev) => {
@@ -155,6 +167,10 @@ export default function Offload() {
           category: p.category,
           tags: p.tags,
           due: p.due,
+          aiSorted: true,
+          aiOriginalCategory: CATS.some((c) => c.id === normalizeCategory(p.category))
+            ? normalizeCategory(p.category)
+            : "week",
         }, dateKey));
       if (newItems.length === 0) {
         console.warn("[sort] API returned no items. Raw response:", data);
@@ -380,18 +396,29 @@ export default function Offload() {
     it.id === id ? { ...it, done: !it.done, carriedFrom: !it.done ? undefined : it.carriedFrom } : it
   )));
   const removeItem = (id) => setItems((prev) => prev.filter((it) => it.id !== id));
-  const setCategory = (id, category) => setItems((prev) => prev.map((it) => {
-    if (it.id !== id) return it;
+  const setCategory = (id, category) => setItems((prev) => {
+    const target = prev.find((it) => it.id === id);
     const cat = normalizeCategory(category);
-    return {
-      ...it,
-      category: cat,
-      due: ensureDue(cat, dateKey),
-      carriedFrom: undefined,
-      resurfacedFrom: undefined,
-      somedaySince: cat === "someday" ? dateKey : undefined,
-    };
-  }));
+    if (target?.aiSorted && target.aiOriginalCategory && target.aiOriginalCategory !== cat) {
+      logCorrection({
+        text: target.text,
+        aiCategory: target.aiOriginalCategory,
+        correctedCategory: cat,
+      });
+    }
+    return prev.map((it) => {
+      if (it.id !== id) return it;
+      return {
+        ...it,
+        category: cat,
+        due: ensureDue(cat, dateKey),
+        carriedFrom: undefined,
+        resurfacedFrom: undefined,
+        somedaySince: cat === "someday" ? dateKey : undefined,
+        aiSorted: false,
+      };
+    });
+  });
   const editItem = (id, text) => setItems((prev) => prev.map((it) => (it.id === id ? { ...it, text } : it)));
   const setDue = (id, due) => setItems((prev) => prev.map((it) => (
     it.id === id ? { ...it, due: due || undefined, carriedFrom: undefined } : it
