@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { sanitizeEnvValue } from "./env.js";
 
 const serverAuthOptions = {
   auth: {
@@ -9,9 +10,9 @@ const serverAuthOptions = {
 };
 
 function readEnv() {
-  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL)?.trim();
-  const anonKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY)?.trim();
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const url = sanitizeEnvValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+  const anonKey = sanitizeEnvValue(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
+  const serviceRoleKey = sanitizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
   return { url, anonKey, serviceRoleKey };
 }
 
@@ -34,7 +35,7 @@ export function getServerSupabaseConfigError() {
 
 export function getLoginSecret() {
   const { serviceRoleKey } = readEnv();
-  return process.env.LOGIN_SECRET?.trim() || serviceRoleKey;
+  return sanitizeEnvValue(process.env.LOGIN_SECRET) || serviceRoleKey;
 }
 
 export function createServerClients() {

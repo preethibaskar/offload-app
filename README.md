@@ -67,7 +67,8 @@ Note: `npm run dev` wires up `/api/login` and `/api/sort` locally via
    - `ANTHROPIC_API_KEY`
    **Important:** Vite embeds `VITE_*` vars at build time. After adding or
    changing them, you must **Redeploy** (Deployments → Redeploy) — saving
-   env vars alone is not enough.
+   env vars alone is not enough. Paste each secret as a **single line** with
+   no extra newlines (a duplicated `SUPABASE_SERVICE_ROLE_KEY` breaks login).
 4. Deploy. You'll get a URL like `offload-yourname.vercel.app`.
 5. Add people (no email sent):
    ```

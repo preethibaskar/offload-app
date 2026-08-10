@@ -6,6 +6,7 @@
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { deriveLoginPassword } from "../api/loginPassword.js";
+import { sanitizeEnvValue } from "../api/env.js";
 
 dotenv.config();
 
@@ -15,9 +16,9 @@ if (!email) {
   process.exit(1);
 }
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const loginSecret = process.env.LOGIN_SECRET?.trim() || serviceRoleKey;
+const supabaseUrl = sanitizeEnvValue(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+const serviceRoleKey = sanitizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
+const loginSecret = sanitizeEnvValue(process.env.LOGIN_SECRET) || serviceRoleKey;
 
 const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
