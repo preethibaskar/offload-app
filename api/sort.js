@@ -1,6 +1,7 @@
 import { buildSortPrompt } from "../shared/sortPrompt.js";
 import { computeCapacitySnapshot, normalizePreferences } from "../shared/preferences.js";
 import { getServerSupabaseConfigError, createServerClients } from "./supabaseClients.js";
+import { sanitizeEnvValue } from "./env.js";
 
 // This runs on the server (Vercel), never in the browser. The Anthropic API
 // key below is read from an environment variable set in the Vercel project
@@ -67,12 +68,20 @@ export default async function handler(req, res) {
     capacity,
   });
 
+  const anthropicKey = sanitizeEnvValue(process.env.ANTHROPIC_API_KEY);
+  if (!anthropicKey) {
+    console.error("[api/sort] missing ANTHROPIC_API_KEY");
+    return res.status(503).json({
+      error: "Sort is not configured — add ANTHROPIC_API_KEY on Vercel and redeploy.",
+    });
+  }
+
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "x-api-key": anthropicKey,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -84,10 +93,12 @@ export default async function handler(req, res) {
     const data = await response.json();
     if (!response.ok) {
       const message = data?.error?.message || "Anthropic request failed";
+      console.error("[api/sort] anthropic:", response.status, message);
       return res.status(502).json({ error: message });
     }
     return res.status(200).json(data);
   } catch (err) {
+    console.error("[api/sort]", err);
     return res.status(500).json({ error: "Anthropic request failed" });
   }
 }

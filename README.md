@@ -64,7 +64,7 @@ Note: `npm run dev` wires up `/api/login` and `/api/sort` locally via
    - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (used by the frontend build)
    - `SUPABASE_SERVICE_ROLE_KEY` (used by `/api/login` and `/api/sort`)
    - Recommended for API routes (same values as above): `SUPABASE_URL`, `SUPABASE_ANON_KEY`
-   - `ANTHROPIC_API_KEY`
+   - `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com) — server-only, single line, no extra newlines)
    **Important:** Vite embeds `VITE_*` vars at build time. After adding or
    changing them, you must **Redeploy** (Deployments → Redeploy) — saving
    env vars alone is not enough. Paste each secret as a **single line** with
