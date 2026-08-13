@@ -1,13 +1,13 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import {
-  Sparkles, Plus, X, Check, Clock, CalendarDays, History, Loader2,
+  Sparkles, Plus, X, Check, Clock, CalendarDays, Loader2,
   ChevronUp, ChevronDown, Calendar, Repeat, Bell, BarChart3, Trash2, Filter, Sunrise, Settings
 } from "lucide-react";
 import { storage } from "../lib/storage";
 import { supabase } from "../supabaseClient";
 import { ENERGY_TAGS, ensureTags, itemMatchesTagFilters, tagById } from "../lib/energyTags";
 import {
-  addDaysToKey, promoteByDueDate, rolloverFromYesterday, itemsChanged,
+  addDaysToKey, promoteByDueDate, itemsChanged,
   normalizeCategory, ensureDue, backfillItem, resurfaceSomedayItems, defaultDueForCategory,
 } from "../lib/dayRollover";
 import { filterDuplicates, isDuplicateOfExisting } from "../lib/dedup";
@@ -89,13 +89,11 @@ const resizeItemText = (el) => {
 };
 
 export default function Offload() {
-  const [dateKey, setDateKey] = useState(todayKey());
+  const [dateKey] = useState(todayKey());
   const [dump, setDump] = useState("");
   const [items, setItems] = useState([]);
   const [pendingSorts, setPendingSorts] = useState(0);
   const [loaded, setLoaded] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyKeys, setHistoryKeys] = useState([]);
   const [addingTo, setAddingTo] = useState(null);
   const [addText, setAddText] = useState("");
   const [error, setError] = useState("");
@@ -296,138 +294,137 @@ export default function Offload() {
     return false;
   };
 
-  const loadDay = useCallback(async (key, recurringList) => {
+  const loadApp = useCallback(async (recurringList) => {
     const loadId = ++loadIdRef.current;
+    const today = todayKey();
     setLoaded(false);
     setCarryOverNudge(null);
     setResurfaceNudge(null);
-    let baseItems = [];
-    let baseDump = "";
+
+    const seenIds = new Set();
+    let openItems = [];
+    let todayDoneItems = [];
+    let todayDump = "";
+    let carriedFromPast = 0;
+    const planCleanup = [];
+
     try {
-      const res = await storage.get(`plan:${key}`);
-      if (res && res.value) {
-        const parsed = JSON.parse(res.value);
-        baseItems = parsed.items || [];
-        baseDump = parsed.dump || "";
+      const res = await storage.list("plan:");
+      const planKeys = (res?.keys || [])
+        .map((k) => k.replace("plan:", ""))
+        .sort();
+
+      for (const key of planKeys) {
+        let dayItems = [];
+        let dayDump = "";
+        try {
+          const planRes = await storage.get(`plan:${key}`);
+          if (planRes?.value) {
+            const parsed = JSON.parse(planRes.value);
+            dayItems = parsed.items || [];
+            dayDump = parsed.dump || "";
+          }
+        } catch { /* no saved plan for this day */ }
+
+        if (key === today) todayDump = dayDump;
+
+        const doneItems = [];
+        for (const raw of dayItems) {
+          if (raw.done) {
+            doneItems.push(raw);
+            if (key === today) todayDoneItems.push(raw);
+          } else if (!seenIds.has(raw.id)) {
+            seenIds.add(raw.id);
+            const { item } = backfillItem(raw, today);
+            openItems.push(item);
+            if (key !== today) carriedFromPast++;
+          }
+        }
+
+        if (key !== today && dayItems.some((it) => !it.done)) {
+          planCleanup.push({ key, items: doneItems, dump: dayDump });
+        }
       }
-    } catch { /* no saved plan yet */ }
+    } catch { /* best effort */ }
 
     if (loadId !== loadIdRef.current) return;
 
-    let backfillChanged = false;
-    baseItems = baseItems.map((it) => {
-      const { item, changed } = backfillItem(it, key);
-      if (changed) backfillChanged = true;
-      return item;
-    });
+    let changed = false;
+    const landing = {};
 
-    if (key === todayKey()) {
-      let changed = backfillChanged;
-      const landing = {};
+    if (carriedFromPast > 0) {
+      setCarryOverNudge({ count: carriedFromPast });
+    }
 
-      try {
-        const rolloverMarker = `rollover:${key}`;
-        const markerRes = await storage.get(rolloverMarker);
-        if (!markerRes) {
-          const yesterdayKey = addDays(key, -1);
-          const yRes = await storage.get(`plan:${yesterdayKey}`);
-          if (yRes?.value) {
-            const yPlan = JSON.parse(yRes.value);
-            const yItems = yPlan.items || [];
-            const { todayItems, yesterdayItems, carriedCount } = rolloverFromYesterday(yItems, baseItems, yesterdayKey);
-            if (carriedCount > 0) {
-              baseItems = todayItems;
-              changed = true;
-              todayItems.filter((it) => it.carriedFrom).forEach((it) => { landing[it.id] = true; });
-              setCarryOverNudge({ count: carriedCount, from: yesterdayKey });
-            }
-            if (itemsChanged(yItems, yesterdayItems)) {
-              await storage.set(`plan:${yesterdayKey}`, JSON.stringify({ items: yesterdayItems, dump: yPlan.dump || "" }));
-            }
-          }
-          await storage.set(rolloverMarker, "1");
-        }
-      } catch { /* rollover is best-effort */ }
-
-      (recurringList || []).forEach((tmpl) => {
-        if (isScheduled(tmpl, key) && !baseItems.some((it) => it.recurringId === tmpl.id)) {
-          const newIt = newTask({
-            text: tmpl.text,
-            category: tmpl.category,
-            recurringId: tmpl.id,
-          }, key);
-          baseItems = [...baseItems, newIt];
-          landing[newIt.id] = true;
-          changed = true;
-        }
-      });
-
-      const promoted = promoteByDueDate(baseItems, key);
-      if (itemsChanged(baseItems, promoted)) {
-        promoted.forEach((it) => {
-          const prev = baseItems.find((p) => p.id === it.id);
-          if (prev && prev.category !== it.category) landing[it.id] = true;
-        });
-        baseItems = promoted;
+    (recurringList || []).forEach((tmpl) => {
+      if (isScheduled(tmpl, today) && !openItems.some((it) => it.recurringId === tmpl.id)) {
+        const newIt = newTask({
+          text: tmpl.text,
+          category: tmpl.category,
+          recurringId: tmpl.id,
+        }, today);
+        openItems = [...openItems, newIt];
+        landing[newIt.id] = true;
         changed = true;
       }
+    });
 
-      try {
-        const resurfaceMarker = `someday-resurface:${key}`;
-        const resurfaceDone = await storage.get(resurfaceMarker);
-        if (!resurfaceDone) {
-          const { items: resurfacedItems, resurfaced } = resurfaceSomedayItems(baseItems, key);
-          if (resurfaced.length > 0) {
-            baseItems = resurfacedItems;
-            changed = true;
-            resurfaced.forEach((r) => { landing[r.id] = true; });
-            setResurfaceNudge({ count: resurfaced.length, items: resurfaced });
-          }
-          await storage.set(resurfaceMarker, "1");
+    const promoted = promoteByDueDate(openItems, today);
+    if (itemsChanged(openItems, promoted)) {
+      promoted.forEach((it) => {
+        const prev = openItems.find((p) => p.id === it.id);
+        if (prev && prev.category !== it.category) landing[it.id] = true;
+      });
+      openItems = promoted;
+      changed = true;
+    }
+
+    try {
+      const resurfaceMarker = `someday-resurface:${today}`;
+      const resurfaceDone = await storage.get(resurfaceMarker);
+      if (!resurfaceDone) {
+        const { items: resurfacedItems, resurfaced } = resurfaceSomedayItems(openItems, today);
+        if (resurfaced.length > 0) {
+          openItems = resurfacedItems;
+          changed = true;
+          resurfaced.forEach((r) => { landing[r.id] = true; });
+          setResurfaceNudge({ count: resurfaced.length, items: resurfaced });
         }
-      } catch { /* resurface is best-effort */ }
-
-      if (changed) {
-        persistPlan(key, baseItems, baseDump);
-        setJustLanded(landing);
-        setTimeout(() => setJustLanded({}), 900);
+        await storage.set(resurfaceMarker, "1");
       }
-    } else if (backfillChanged) {
-      persistPlan(key, baseItems, baseDump);
+    } catch { /* resurface is best-effort */ }
+
+    for (const { key, items: doneItems, dump: dayDump } of planCleanup) {
+      try {
+        await storage.set(`plan:${key}`, JSON.stringify({ items: doneItems, dump: dayDump }));
+      } catch { /* best effort */ }
+    }
+
+    if (changed) {
+      setJustLanded(landing);
+      setTimeout(() => setJustLanded({}), 900);
     }
 
     if (loadId !== loadIdRef.current) return;
 
-    setItems(baseItems);
-    setDump(baseDump);
+    setItems([...openItems, ...todayDoneItems]);
+    setDump(todayDump);
     setLoaded(true);
-  }, [persistPlan]);
+  }, []);
 
   useEffect(() => {
-    if (recurringLoaded) loadDay(dateKey, recurring);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateKey, recurringLoaded]);
+    if (recurringLoaded) loadApp(recurring);
+  }, [recurringLoaded, loadApp]);
 
   useEffect(() => {
     if (!loaded) return;
-    persistPlan(dateKey, items, dump);
-  }, [items, dump, loaded, dateKey, persistPlan]);
+    persistPlan(todayKey(), items, dump);
+  }, [items, dump, loaded, persistPlan]);
 
   useLayoutEffect(() => {
     if (!loaded) return;
     document.querySelectorAll(".offload-app .item-text").forEach(resizeItemText);
   }, [items, loaded]);
-
-  const openHistory = async () => {
-    try {
-      const res = await storage.list("plan:");
-      const keys = (res?.keys || []).map((k) => k.replace("plan:", "")).sort().reverse();
-      setHistoryKeys(keys);
-    } catch {
-      setHistoryKeys([]);
-    }
-    setHistoryOpen(true);
-  };
 
   const loadWeek = useCallback(async () => {
     setWeekLoading(true);
@@ -713,15 +710,6 @@ export default function Offload() {
 
         .empty-tray { font-size: 12px; color: #a7a196; font-style: italic; padding: 6px 6px; }
 
-        .hist-overlay { position: fixed; inset: 0; background: rgba(33,38,43,0.35); display: flex; align-items: flex-start;
-          justify-content: center; padding-top: 80px; z-index: 20; }
-        .hist-panel { background: var(--paper-raised); border-radius: 12px; border: 1px solid var(--line); width: 320px;
-          max-height: 60vh; overflow-y: auto; padding: 8px; }
-        .hist-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; display: flex; justify-content: space-between; }
-        .hist-item:hover { background: var(--paper); }
-        .hist-item.active { background: var(--today-bg); color: var(--today); font-weight: 600; }
-        .hist-empty { padding: 16px; font-size: 13px; color: var(--ink-soft); }
-
         .rec-panel { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
         .rec-panel h3 { margin: 0 0 10px; font-size: 14px; }
         .rec-list-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
@@ -780,7 +768,6 @@ export default function Offload() {
             <button className={`offload-histbtn ${view === "week" ? "active" : ""}`} onClick={() => setView(view === "week" ? "day" : "week")}>
               <BarChart3 size={13} />Week view
             </button>
-            <button className="offload-histbtn" onClick={openHistory}><History size={13} />History</button>
           </div>
         </div>
         <p className="offload-sub">Get it out of your head. Sort it once. Let the trays hold it.</p>
@@ -823,7 +810,7 @@ export default function Offload() {
         {view === "day" && carryOverNudge && (
           <div className="carryover-banner">
             <span>
-              <b>{carryOverNudge.count}</b> unfinished from yesterday — moved to Today.
+              <b>{carryOverNudge.count}</b> unfinished from earlier — moved to Today.
               Finish them, reschedule with the calendar icon, or snooze to Tomorrow.
             </span>
             <div className="carryover-actions">
@@ -956,7 +943,7 @@ export default function Offload() {
 
             <div className="trays">
               {CATS.map((cat) => {
-                const allCatItems = items.filter((it) => it.category === cat.id);
+                const allCatItems = items.filter((it) => it.category === cat.id && !it.done);
                 const catItems = allCatItems.filter((it) => itemMatchesTagFilters(it, tagFilters));
                 const Icon = cat.icon;
                 return (
@@ -1077,7 +1064,7 @@ export default function Offload() {
                   const pct = d.total > 0 ? Math.round((d.done / d.total) * 100) : 0;
                   return (
                     <div className={`week-card ${d.key === todayKey() ? "is-today" : ""}`} key={d.key}
-                      onClick={() => { setDateKey(d.key); setView("day"); }}>
+                      onClick={() => setView("day")}>
                       <div className="week-day">{fmtShort(d.key)}</div>
                       <div className="week-date">{dateFromKey(d.key).getDate()}</div>
                       <div className="week-bar"><div className="week-bar-fill" style={{ width: `${pct}%` }} /></div>
@@ -1090,21 +1077,6 @@ export default function Offload() {
           </div>
         )}
       </div>
-
-      {historyOpen && (
-        <div className="hist-overlay" onClick={() => setHistoryOpen(false)}>
-          <div className="hist-panel" onClick={(e) => e.stopPropagation()}>
-            {historyKeys.length === 0 && <div className="hist-empty">No past days saved yet.</div>}
-            {historyKeys.map((k) => (
-              <div className={`hist-item ${k === dateKey ? "active" : ""}`} key={k}
-                onClick={() => { setDateKey(k); setView("day"); setHistoryOpen(false); }}>
-                <span>{fmtDate(k)}</span>
-                {k === todayKey() && <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>today</span>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
