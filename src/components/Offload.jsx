@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import {
   Sparkles, Plus, X, Check, Clock, CalendarDays, Loader2,
-  ChevronUp, ChevronDown, Calendar, Repeat, Bell, BarChart3, Trash2, Filter, Sunrise, Settings
+  ChevronUp, ChevronDown, Calendar, Repeat, Bell, Trash2, Filter, Sunrise, Settings
 } from "lucide-react";
 import { storage } from "../lib/storage";
 import { supabase } from "../supabaseClient";
@@ -51,14 +51,6 @@ const fmtShort = (key) =>
   dateFromKey(key).toLocaleDateString(undefined, { weekday: "short" });
 
 const addDays = (key, n) => addDaysToKey(key, n);
-
-const mondayOf = (key) => {
-  const d = dateFromKey(key);
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return d;
-};
 
 const dueLabel = (due) => {
   if (!due) return null;
@@ -110,9 +102,6 @@ export default function Offload() {
   const [recText, setRecText] = useState("");
   const [recCategory, setRecCategory] = useState("today");
   const [recRepeat, setRecRepeat] = useState("daily");
-  const [view, setView] = useState("day");
-  const [weekData, setWeekData] = useState(null);
-  const [weekLoading, setWeekLoading] = useState(false);
   const [tagFilters, setTagFilters] = useState([]);
   const [carryOverNudge, setCarryOverNudge] = useState(null);
   const [resurfaceNudge, setResurfaceNudge] = useState(null);
@@ -567,31 +556,6 @@ export default function Offload() {
     document.querySelectorAll(".offload-app .item-text").forEach(resizeItemText);
   }, [items, loaded]);
 
-  const loadWeek = useCallback(async () => {
-    setWeekLoading(true);
-    const monday = mondayOf(dateKey);
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
-      const key = keyFromDate(d);
-      let total = 0, done = 0;
-      try {
-        const res = await storage.get(`plan:${key}`);
-        if (res && res.value) {
-          const parsed = JSON.parse(res.value);
-          total = (parsed.items || []).length;
-          done = (parsed.items || []).filter((it) => it.done).length;
-        }
-      } catch { /* nothing saved for this day */ }
-      days.push({ key, total, done });
-    }
-    setWeekData(days);
-    setWeekLoading(false);
-  }, [dateKey]);
-
-  useEffect(() => { if (view === "week") loadWeek(); }, [view, loadWeek]);
-
   const toggleDone = (id) => setItems((prev) => prev.map((it) => (
     it.id === id ? { ...it, done: !it.done, carriedFrom: !it.done ? undefined : it.carriedFrom } : it
   )));
@@ -731,11 +695,10 @@ export default function Offload() {
         .offload-title { font-family: 'Fraunces', Georgia, serif; font-weight: 600; font-size: 34px; letter-spacing: -0.01em; margin: 0; }
         .offload-sub { color: var(--ink-soft); font-size: 14px; margin: 4px 0 22px; }
         .offload-daterow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .offload-datebtn, .offload-histbtn { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft);
-          background: var(--paper-raised); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer;
+        .offload-datebtn { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-soft);
+          background: var(--paper-raised); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
           display: flex; align-items: center; gap: 6px; }
-        .offload-histbtn:hover, .offload-datebtn:hover { border-color: var(--ink-soft); color: var(--ink); }
-        .offload-histbtn.active { background: var(--today-bg); color: var(--today); border-color: var(--today); }
+        .offload-datebtn:hover { border-color: var(--ink-soft); color: var(--ink); }
 
         .reminder-banner { display: flex; align-items: center; gap: 8px; background: var(--waiting-bg); color: var(--waiting);
           border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -909,16 +872,6 @@ export default function Offload() {
           border: 1px solid var(--line); color: var(--ink-soft); border-radius: 10px; padding: 10px 14px;
           font-size: 13px; margin-bottom: 18px; }
 
-        .week-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
-        .week-card { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 14px 10px; cursor: pointer; text-align: center; }
-        .week-card:hover { border-color: var(--ink-soft); }
-        .week-card.is-today { border-color: var(--today); }
-        .week-day { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
-        .week-date { font-family: 'Fraunces', serif; font-size: 20px; margin-bottom: 8px; }
-        .week-bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; margin-bottom: 6px; }
-        .week-bar-fill { height: 100%; background: var(--today); }
-        .week-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
-
         @media (max-width: 480px) { .offload-title { font-size: 27px; } }
       `}</style>
 
@@ -927,14 +880,11 @@ export default function Offload() {
           <h1 className="offload-title">Offload</h1>
           <div className="offload-daterow">
             <span className="offload-datebtn"><CalendarDays size={13} />{fmtDate(dateKey)}</span>
-            <button className={`offload-histbtn ${view === "week" ? "active" : ""}`} onClick={() => setView(view === "week" ? "day" : "week")}>
-              <BarChart3 size={13} />Week view
-            </button>
           </div>
         </div>
         <p className="offload-sub">Get it out of your head. Sort it once. Let the trays hold it.</p>
 
-        {view === "day" && pendingSorts > 0 && (
+        {pendingSorts > 0 && (
           <div className="sorting-banner">
             <Loader2 size={14} className="spin" />
             <span>
@@ -944,7 +894,7 @@ export default function Offload() {
           </div>
         )}
 
-        {view === "day" && sortClarification && (
+        {sortClarification && (
           <div className="clarify-banner">
             <p className="clarify-head">Need a bit more context to sort the rest</p>
             {sortClarification.pending.map((p, idx) => {
@@ -990,7 +940,7 @@ export default function Offload() {
           </div>
         )}
 
-        {view === "day" && sortNudge && (
+        {sortNudge && (
           <div className="sort-nudge-banner">
             <span>
               {sortNudge.skipped > 0 && (
@@ -1004,7 +954,7 @@ export default function Offload() {
           </div>
         )}
 
-        {view === "day" && resurfaceNudge && (
+        {resurfaceNudge && (
           <div className="resurface-banner">
             <span>
               <b>{resurfaceNudge.count}</b> Someday {resurfaceNudge.count === 1 ? "idea" : "ideas"} resurfaced
@@ -1015,7 +965,7 @@ export default function Offload() {
           </div>
         )}
 
-        {view === "day" && carryOverNudge && (
+        {carryOverNudge && (
           <div className="carryover-banner">
             <span>
               <b>{carryOverNudge.count}</b> unfinished from earlier — moved to Today.
@@ -1027,7 +977,7 @@ export default function Offload() {
           </div>
         )}
 
-        {view === "day" && dueSoon.length > 0 && (
+        {dueSoon.length > 0 && (
           <div className="reminder-banner">
             <Bell size={15} />
             <span><b>{dueSoon.filter((it) => it.due <= todayKey()).length}</b> due today
@@ -1036,8 +986,7 @@ export default function Offload() {
           </div>
         )}
 
-        {view === "day" ? (
-          <>
+        <>
             <div className="dumpzone">
               <textarea
                 placeholder="Everything on your mind, no order needed — deadlines, errands, half-formed ideas..."
@@ -1263,27 +1212,6 @@ export default function Offload() {
               })}
             </div>
           </>
-        ) : (
-          <div>
-            {weekLoading && <div className="empty-tray">Loading week...</div>}
-            {weekData && (
-              <div className="week-grid">
-                {weekData.map((d) => {
-                  const pct = d.total > 0 ? Math.round((d.done / d.total) * 100) : 0;
-                  return (
-                    <div className={`week-card ${d.key === todayKey() ? "is-today" : ""}`} key={d.key}
-                      onClick={() => setView("day")}>
-                      <div className="week-day">{fmtShort(d.key)}</div>
-                      <div className="week-date">{dateFromKey(d.key).getDate()}</div>
-                      <div className="week-bar"><div className="week-bar-fill" style={{ width: `${pct}%` }} /></div>
-                      <div className="week-count">{d.done}/{d.total}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
