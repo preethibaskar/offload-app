@@ -92,7 +92,7 @@ export default function Offload() {
   const [dateKey, setDateKey] = useState(todayKey());
   const [dump, setDump] = useState("");
   const [items, setItems] = useState([]);
-  const [sorting, setSorting] = useState(false);
+  const [pendingSorts, setPendingSorts] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyKeys, setHistoryKeys] = useState([]);
@@ -168,16 +168,11 @@ export default function Offload() {
     }
   }, []);
 
-  const sortDump = useCallback(async (textOverride) => {
-    const dumpText = (textOverride ?? dumpRef.current).trim();
-    if (!dumpText) return;
-    setSorting(true);
-    setError("");
-    setSortNudge(null);
+  const runSortJob = useCallback(async (dumpText) => {
+    setPendingSorts((n) => n + 1);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
-      const openItems = itemsRef.current.filter((it) => !it.done);
       const prefs = preferencesRef.current;
 
       const response = await fetch("/api/sort", {
@@ -188,12 +183,14 @@ export default function Offload() {
         },
         body: JSON.stringify({
           dump: dumpText,
-          existingItems: openItems.map((it) => ({
-            text: it.text,
-            category: it.category,
-            tags: it.tags,
-            done: it.done,
-          })),
+          existingItems: itemsRef.current
+            .filter((it) => !it.done)
+            .map((it) => ({
+              text: it.text,
+              category: it.category,
+              tags: it.tags,
+              done: it.done,
+            })),
           preferences: prefs,
           planDay: dateKey,
         }),
@@ -216,6 +213,7 @@ export default function Offload() {
             : "week",
         }));
 
+      const openItems = itemsRef.current.filter((it) => !it.done);
       const { unique, skipped } = filterDuplicates(parsed, openItems);
       const { items: capacityPlanned, deferred } = applyCapacityPlan(
         unique,
@@ -229,7 +227,6 @@ export default function Offload() {
       if (newItems.length === 0) {
         if (skipped.length > 0) {
           setSortNudge({ skipped: skipped.length, deferred: [] });
-          setDump("");
           return;
         }
         console.warn("[sort] API returned no items. Raw response:", data);
@@ -244,12 +241,22 @@ export default function Offload() {
       if (skipped.length > 0 || deferred.length > 0) {
         setSortNudge({ skipped: skipped.length, deferred });
       }
-      setDump("");
     } catch (err) {
+      setDump((prev) => (prev.trim() ? prev : dumpText));
       setError(err.message || "Couldn't sort that dump — try again in a moment.");
+    } finally {
+      setPendingSorts((n) => Math.max(0, n - 1));
     }
-    setSorting(false);
   }, [dateKey]);
+
+  const sortDump = useCallback(() => {
+    const dumpText = dumpRef.current.trim();
+    if (!dumpText) return;
+    setError("");
+    setSortNudge(null);
+    setDump("");
+    void runSortJob(dumpText);
+  }, [runSortJob]);
 
   const persistPlan = useCallback(async (key, nextItems, nextDump) => {
     try {
@@ -736,6 +743,9 @@ export default function Offload() {
           background: var(--week-bg); color: var(--week); border-radius: 10px; padding: 10px 14px;
           font-size: 13px; margin-bottom: 18px; flex-wrap: wrap; }
         .sort-nudge-banner b { font-weight: 700; }
+        .sorting-banner { display: flex; align-items: center; gap: 8px; background: var(--paper-raised);
+          border: 1px solid var(--line); color: var(--ink-soft); border-radius: 10px; padding: 10px 14px;
+          font-size: 13px; margin-bottom: 18px; }
 
         .week-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
         .week-card { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 14px 10px; cursor: pointer; text-align: center; }
@@ -762,6 +772,16 @@ export default function Offload() {
           </div>
         </div>
         <p className="offload-sub">Get it out of your head. Sort it once. Let the trays hold it.</p>
+
+        {view === "day" && pendingSorts > 0 && (
+          <div className="sorting-banner">
+            <Loader2 size={14} className="spin" />
+            <span>
+              Sorting {pendingSorts === 1 ? "your dump" : `${pendingSorts} dumps`} in the background
+              — keep typing or start your next one.
+            </span>
+          </div>
+        )}
 
         {view === "day" && sortNudge && (
           <div className="sort-nudge-banner">
@@ -827,10 +847,10 @@ export default function Offload() {
                   <button
                     className="sort-btn"
                     onClick={() => sortDump()}
-                    disabled={sorting || !loaded || !preferencesLoaded || !dump.trim()}
+                    disabled={!loaded || !preferencesLoaded || !dump.trim()}
                   >
-                    {sorting ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
-                    {sorting ? "Sorting" : "Sort it out"}
+                    <Sparkles size={14} />
+                    Sort it out
                   </button>
                 </div>
               </div>
