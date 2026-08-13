@@ -40,7 +40,7 @@ async function callSort(text) {
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 500,
+      max_tokens: 2000,
       messages: [{ role: "user", content: buildSortPrompt(text) }],
     }),
   });
@@ -86,7 +86,7 @@ async function main() {
       continue;
     }
 
-    const categories = predictions.map((p) => (Array.isArray(p) && p[0] ? p[0].category : null));
+    const categories = predictions.map((p) => (p.items[0] ? p.items[0].category : null));
     if (categories.some((c) => c === null)) {
       parseErrors.push({ text, error: "Response did not contain a usable item" });
       continue;

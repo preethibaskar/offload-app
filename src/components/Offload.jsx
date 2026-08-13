@@ -13,7 +13,7 @@ import {
 import { filterDuplicates, isDuplicateOfExisting } from "../lib/dedup";
 import { applyCapacityPlan } from "../lib/capacity";
 import { PREFERENCE_KEY, DEFAULT_PREFERENCES, normalizePreferences } from "../../shared/preferences.js";
-import { parseSortResponse } from "../../shared/sortPrompt.js";
+import { parseSortResponse, CLARIFY_OPTIONS } from "../../shared/sortPrompt.js";
 import PreferencesPanel from "./PreferencesPanel";
 
 const CATS = [
@@ -116,6 +116,8 @@ export default function Offload() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [prefsMessage, setPrefsMessage] = useState(null);
   const [sortNudge, setSortNudge] = useState(null);
+  const [sortClarification, setSortClarification] = useState(null);
+  const [clarifyAnswers, setClarifyAnswers] = useState({});
   const loadIdRef = useRef(0);
   const dumpRef = useRef("");
   const itemsRef = useRef([]);
@@ -175,7 +177,55 @@ export default function Offload() {
     return () => clearTimeout(timer);
   }, [prefsMessage]);
 
-  const runSortJob = useCallback(async (dumpText) => {
+  const applySortedItems = useCallback((rawItems, { allowEmpty = false } = {}) => {
+    const prefs = preferencesRef.current;
+    const parsed = rawItems
+      .filter((p) => p && p.text)
+      .map((p) => ({
+        text: p.text,
+        category: p.category,
+        tags: p.tags,
+        due: p.due,
+        aiSorted: true,
+        aiOriginalCategory: CATS.some((c) => c.id === normalizeCategory(p.category))
+          ? normalizeCategory(p.category)
+          : "week",
+      }));
+
+    const openItems = itemsRef.current.filter((it) => !it.done);
+    const { unique, skipped } = filterDuplicates(parsed, openItems);
+    const { items: capacityPlanned, deferred } = applyCapacityPlan(
+      unique,
+      openItems,
+      prefs,
+      dateKey
+    );
+
+    const newItems = capacityPlanned.map((p) => newTask(p, dateKey));
+
+    if (newItems.length === 0) {
+      if (skipped.length > 0) {
+        setSortNudge({ skipped: skipped.length, deferred: [] });
+        return { added: 0, skipped, deferred };
+      }
+      if (!allowEmpty) {
+        throw new Error("Sort returned no items — try again.");
+      }
+      return { added: 0, skipped, deferred };
+    }
+
+    setItems((prev) => [...prev, ...newItems]);
+    const landing = {};
+    newItems.forEach((it) => (landing[it.id] = true));
+    setJustLanded(landing);
+    setTimeout(() => setJustLanded({}), 900);
+    if (skipped.length > 0 || deferred.length > 0) {
+      setSortNudge({ skipped: skipped.length, deferred });
+    }
+    return { added: newItems.length, skipped, deferred };
+  }, [dateKey]);
+
+  const runSortJob = useCallback(async (dumpText, clarifications = null) => {
     setPendingSorts((n) => n + 1);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -190,6 +240,7 @@ export default function Offload() {
         },
         body: JSON.stringify({
           dump: dumpText,
+          clarifications,
           existingItems: itemsRef.current
             .filter((it) => !it.done)
             .map((it) => ({
@@ -207,63 +258,84 @@ export default function Offload() {
         throw new Error(err.error || "Sort request failed");
       }
       const data = await response.json();
-      const parsed = parseSortResponse(data)
-        .filter((p) => p && p.text)
-        .map((p) => ({
-          text: p.text,
-          category: p.category,
-          tags: p.tags,
-          due: p.due,
-          aiSorted: true,
-          aiOriginalCategory: CATS.some((c) => c.id === normalizeCategory(p.category))
-            ? normalizeCategory(p.category)
-            : "week",
-        }));
+      const { items, pending } = parseSortResponse(data);
 
-      const openItems = itemsRef.current.filter((it) => !it.done);
-      const { unique, skipped } = filterDuplicates(parsed, openItems);
-      const { items: capacityPlanned, deferred } = applyCapacityPlan(
-        unique,
-        openItems,
-        prefs,
-        dateKey
-      );
+      if (items.length > 0) {
+        applySortedItems(items);
+      }
 
-      const newItems = capacityPlanned.map((p) => newTask(p, dateKey));
+      if (pending.length > 0 && !clarifications) {
+        setSortClarification({ dumpText, pending });
+        setClarifyAnswers({});
+        return;
+      }
 
-      if (newItems.length === 0) {
-        if (skipped.length > 0) {
-          setSortNudge({ skipped: skipped.length, deferred: [] });
-          return;
-        }
+      if (pending.length > 0 && clarifications) {
+        applySortedItems(
+          pending.map((p) => ({ text: p.raw, category: "week", tags: [] })),
+          { allowEmpty: true }
+        );
+      }
+
+      if (items.length === 0 && pending.length === 0) {
         console.warn("[sort] API returned no items. Raw response:", data);
         throw new Error("Sort returned no items — try again.");
       }
 
-      setItems((prev) => [...prev, ...newItems]);
-      const landing = {};
-      newItems.forEach((it) => (landing[it.id] = true));
-      setJustLanded(landing);
-      setTimeout(() => setJustLanded({}), 900);
-      if (skipped.length > 0 || deferred.length > 0) {
-        setSortNudge({ skipped: skipped.length, deferred });
-      }
+      setSortClarification(null);
+      setClarifyAnswers({});
     } catch (err) {
-      setDump((prev) => (prev.trim() ? prev : dumpText));
+      if (!clarifications) {
+        setDump((prev) => (prev.trim() ? prev : dumpText));
+      }
       setError(err.message || "Couldn't sort that dump — try again in a moment.");
     } finally {
       setPendingSorts((n) => Math.max(0, n - 1));
     }
-  }, [dateKey]);
+  }, [dateKey, applySortedItems]);
 
   const sortDump = useCallback(() => {
     const dumpText = dumpRef.current.trim();
     if (!dumpText) return;
     setError("");
     setSortNudge(null);
+    setSortClarification(null);
+    setClarifyAnswers({});
     setDump("");
     void runSortJob(dumpText);
   }, [runSortJob]);
+
+  const submitClarification = useCallback(() => {
+    if (!sortClarification) return;
+    const answers = sortClarification.pending.map((p, idx) => ({
+      id: p.id || `p${idx}`,
+      raw: p.raw,
+      answer: (clarifyAnswers[p.id || `p${idx}`] || "").trim(),
+    }));
+    if (answers.some((a) => !a.answer)) {
+      setError("Please answer each question before sorting the rest.");
+      return;
+    }
+    setError("");
+    void runSortJob(sortClarification.dumpText, answers);
+  }, [sortClarification, clarifyAnswers, runSortJob]);
+
+  const skipClarification = useCallback(() => {
+    if (!sortClarification) return;
+    try {
+      const fallback = sortClarification.pending.map((p) => ({
+        text: p.raw,
+        category: "week",
+        tags: [],
+      }));
+      applySortedItems(fallback, { allowEmpty: true });
+      setSortClarification(null);
+      setClarifyAnswers({});
+      setError("");
+    } catch (err) {
+      setError(err.message || "Couldn't sort those items.");
+    }
+  }, [sortClarification, applySortedItems]);
 
   const persistPlan = useCallback(async (key, nextItems, nextDump) => {
     try {
@@ -743,6 +815,27 @@ export default function Offload() {
           background: var(--week-bg); color: var(--week); border-radius: 10px; padding: 10px 14px;
           font-size: 13px; margin-bottom: 18px; flex-wrap: wrap; }
         .sort-nudge-banner b { font-weight: 700; }
+        .clarify-banner { background: var(--tomorrow-bg); border: 1px solid var(--tomorrow); border-radius: 12px;
+          padding: 14px 16px; margin-bottom: 18px; }
+        .clarify-head { font-size: 14px; font-weight: 600; color: var(--tomorrow); margin: 0 0 12px; }
+        .clarify-item { background: var(--paper-raised); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+        .clarify-item:last-of-type { margin-bottom: 0; }
+        .clarify-question { font-size: 13px; margin: 0 0 8px; line-height: 1.45; }
+        .clarify-raw { font-size: 11px; color: var(--ink-soft); margin: 0 0 8px; font-style: italic; }
+        .clarify-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .clarify-opt { font-size: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+          border-radius: 999px; padding: 5px 10px; cursor: pointer; }
+        .clarify-opt:hover { border-color: var(--tomorrow); color: var(--tomorrow); }
+        .clarify-opt.active { background: var(--tomorrow-bg); border-color: var(--tomorrow); color: var(--tomorrow); font-weight: 600; }
+        .clarify-input { width: 100%; font-size: 13px; border: 1px solid var(--line); border-radius: 8px;
+          padding: 8px 10px; background: var(--paper-raised); font-family: inherit; }
+        .clarify-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+        .clarify-submit { border: none; background: var(--ink); color: var(--paper); border-radius: 8px;
+          padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .clarify-submit:disabled { opacity: 0.55; cursor: default; }
+        .clarify-skip { border: 1px solid var(--line); background: var(--paper-raised); color: var(--ink-soft);
+          border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+        .clarify-skip:hover { border-color: var(--ink-soft); color: var(--ink); }
         .sorting-banner { display: flex; align-items: center; gap: 8px; background: var(--paper-raised);
           border: 1px solid var(--line); color: var(--ink-soft); border-radius: 10px; padding: 10px 14px;
           font-size: 13px; margin-bottom: 18px; }
@@ -779,6 +872,52 @@ export default function Offload() {
               Sorting {pendingSorts === 1 ? "your dump" : `${pendingSorts} dumps`} in the background
               — keep typing or start your next one.
             </span>
+          </div>
+        )}
+
+        {view === "day" && sortClarification && (
+          <div className="clarify-banner">
+            <p className="clarify-head">Need a bit more context to sort the rest</p>
+            {sortClarification.pending.map((p, idx) => {
+              const key = p.id || `p${idx}`;
+              return (
+              <div className="clarify-item" key={key}>
+                {p.raw && <p className="clarify-raw">From your dump: “{p.raw}”</p>}
+                <p className="clarify-question">{p.question}</p>
+                <div className="clarify-options">
+                  {(p.options?.length ? p.options : CLARIFY_OPTIONS).map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      className={`clarify-opt ${clarifyAnswers[key] === opt ? "active" : ""}`}
+                      onClick={() => setClarifyAnswers((prev) => ({ ...prev, [key]: opt }))}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  className="clarify-input"
+                  placeholder="Or type your own answer..."
+                  value={clarifyAnswers[key] || ""}
+                  onChange={(e) => setClarifyAnswers((prev) => ({ ...prev, [key]: e.target.value }))}
+                />
+              </div>
+              );
+            })}
+            <div className="clarify-actions">
+              <button
+                type="button"
+                className="clarify-submit"
+                onClick={submitClarification}
+                disabled={pendingSorts > 0}
+              >
+                {pendingSorts > 0 ? "Sorting..." : "Sort the rest"}
+              </button>
+              <button type="button" className="clarify-skip" onClick={skipClarification}>
+                Skip — put in This Week
+              </button>
+            </div>
           </div>
         )}
 

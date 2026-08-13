@@ -50,7 +50,7 @@ export default async function handler(req, res) {
     return res.status(429).json({ error: "Rate limit exceeded, try again later" });
   }
 
-  const { dump, existingItems, preferences, planDay } = req.body || {};
+  const { dump, existingItems, preferences, planDay, clarifications } = req.body || {};
   if (!dump || !dump.trim()) {
     return res.status(400).json({ error: "Empty dump" });
   }
@@ -60,12 +60,16 @@ export default async function handler(req, res) {
     ? existingItems.filter((it) => it && it.text && !it.done)
     : [];
   const capacity = computeCapacitySnapshot(openItems, prefs);
+  const clarificationsList = Array.isArray(clarifications)
+    ? clarifications.filter((c) => c && c.raw && c.answer)
+    : null;
 
   const prompt = buildSortPrompt(dump, {
     existingItems: openItems,
     preferences: prefs,
     planDay,
     capacity,
+    clarifications: clarificationsList?.length ? clarificationsList : null,
   });
 
   const anthropicKey = sanitizeEnvValue(process.env.ANTHROPIC_API_KEY);
@@ -86,7 +90,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 1500,
+        max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
       }),
     });
