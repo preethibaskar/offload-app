@@ -40,6 +40,10 @@ export default function PreferencesPanel({
     setDraft((prev) => ({ ...prev, maxTodayItems: n }));
   };
 
+  const handleSave = () => {
+    void onSave(prefs);
+  };
+
   return (
     <div className="prefs-panel">
       <div className="prefs-head">
@@ -103,7 +107,7 @@ export default function PreferencesPanel({
         </label>
       </div>
 
-      <button type="button" className="prefs-save" onClick={() => onSave(prefs)}>
+      <button type="button" className="prefs-save" onClick={handleSave}>
         Save preferences
       </button>
     </div>

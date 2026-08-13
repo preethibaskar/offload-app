@@ -116,6 +116,7 @@ export default function Offload() {
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [prefsMessage, setPrefsMessage] = useState(null);
   const [sortNudge, setSortNudge] = useState(null);
   const loadIdRef = useRef(0);
   const dumpRef = useRef("");
@@ -160,13 +161,21 @@ export default function Offload() {
 
   const savePreferences = useCallback(async (nextPrefs) => {
     const normalized = normalizePreferences(nextPrefs);
-    setPreferences(normalized);
+    setPreferencesOpen(false);
     try {
       await storage.set(PREFERENCE_KEY, JSON.stringify(normalized));
+      setPreferences(normalized);
+      setPrefsMessage({ type: "success", text: "Daily capacity saved." });
     } catch {
-      setError("Couldn't save preferences.");
+      setPrefsMessage({ type: "error", text: "Couldn't save preferences — try again." });
     }
   }, []);
+
+  useEffect(() => {
+    if (!prefsMessage) return;
+    const timer = setTimeout(() => setPrefsMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [prefsMessage]);
 
   const runSortJob = useCallback(async (dumpText) => {
     setPendingSorts((n) => n + 1);
@@ -657,6 +666,9 @@ export default function Offload() {
           color: var(--ink-soft); padding: 1px 4px; font-family: inherit; max-width: 72px; }
 
         .error-banner { color: var(--waiting); font-size: 13px; margin: -12px 0 18px; }
+        .prefs-toast { font-size: 13px; margin: -8px 0 18px; padding: 10px 14px; border-radius: 10px; }
+        .prefs-toast.success { background: var(--today-bg); color: var(--today); }
+        .prefs-toast.error { background: var(--waiting-bg); color: var(--waiting); }
 
         .trays { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
         .tray { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 14px; min-height: 140px; }
@@ -862,11 +874,22 @@ export default function Offload() {
               </button>
               <button
                 className={`recur-btn ${preferencesOpen ? "active" : ""}`}
-                onClick={() => setPreferencesOpen(!preferencesOpen)}
+                onClick={() => {
+                  setPreferencesOpen((open) => {
+                    if (!open) setPrefsMessage(null);
+                    return !open;
+                  });
+                }}
               >
                 <Settings size={13} />Daily capacity
               </button>
             </div>
+
+            {prefsMessage && (
+              <div className={`prefs-toast ${prefsMessage.type}`} role="status">
+                {prefsMessage.text}
+              </div>
+            )}
 
             {preferencesOpen && preferencesLoaded && (
               <PreferencesPanel
