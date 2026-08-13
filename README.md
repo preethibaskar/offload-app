@@ -106,13 +106,15 @@ over time.
 
 Whenever someone changes the category the AI assigned to an item, that gets
 logged to the `corrections` table (see `supabase/schema.sql`) with the item
-text, the AI's original category, and what the person corrected it to. This
-is a better accuracy signal than any offline test set, because it's your
-actual users' actual dumps.
+text, the AI's original category, and what the person corrected it to. Clarification
+answers from ambiguous sorts are logged the same way (`ai_category = pending`).
 
-To review it, query Supabase directly (SQL editor or table view) — the app
-itself never reads this table back, by design (see the RLS policy comment
-in `schema.sql`). A useful starting query:
+The app reads your recent corrections, builds a **sort profile** (rules +
+few-shot examples), caches it in `kv_store`, and injects it into every
+`/api/sort` call via `shared/sortProfile.js`. The more you correct trays, the
+better future sorts match your now-vs-later preferences.
+
+To review raw signals, query Supabase directly (SQL editor or table view):
 
 ```sql
 select ai_category, corrected_category, count(*)
@@ -121,9 +123,12 @@ group by 1, 2
 order by 3 desc;
 ```
 
+If you deployed before this feature, re-run the new RLS policy in
+`supabase/schema.sql` (`Users can read their own corrections`) so the app can
+load corrections client-side.
+
 If a particular `ai_category -> corrected_category` pair keeps showing up,
-that's your next few-shot example to add to the prompt, and a good
-candidate to add to `eval/dataset.json` too.
+that's a good candidate to add to `eval/dataset.json` too.
 
 ## Notes / next steps
 

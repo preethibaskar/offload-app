@@ -35,12 +35,15 @@ create table if not exists corrections (
 alter table corrections enable row level security;
 
 -- Users can insert their own correction rows (so the app can log them
--- client-side) but cannot read anyone's rows, including their own, from the
--- browser — this table is meant for you (the admin) to review in the
--- Supabase dashboard or via the service role key, not for the app to
--- surface back to users.
+-- client-side) and read them back to build a personalized sort profile.
 drop policy if exists "Users can log their own corrections" on corrections;
 create policy "Users can log their own corrections"
   on corrections
   for insert
   with check (auth.uid() = user_id);
+
+drop policy if exists "Users can read their own corrections" on corrections;
+create policy "Users can read their own corrections"
+  on corrections
+  for select
+  using (auth.uid() = user_id);

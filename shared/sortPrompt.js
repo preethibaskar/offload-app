@@ -4,6 +4,7 @@
 
 import { ENERGY_TAG_IDS } from "../src/lib/energyTags.js";
 import { BUCKET_LABELS, ENERGY_BUCKETS } from "./preferences.js";
+import { formatSortProfileBlock } from "./sortProfile.js";
 
 export const CATEGORIES = ["today", "tomorrow", "week", "someday"];
 
@@ -61,6 +62,7 @@ export function buildSortPrompt(dump, options = {}) {
     planDay = null,
     capacity = null,
     clarifications = null,
+    sortProfile = null,
   } = options;
 
   const contextBlock = formatContextBlock({
@@ -71,6 +73,7 @@ export function buildSortPrompt(dump, options = {}) {
   });
 
   const clarificationsBlock = formatClarificationsBlock(clarifications);
+  const sortProfileBlock = formatSortProfileBlock(sortProfile);
 
   const dedupRule = existingItems?.length
     ? "If the dump mentions something already on the list, do NOT add it again — skip it entirely."
@@ -102,7 +105,7 @@ For each item, you MUST include a "tags" array with 1-2 values from this list on
 Every item needs tags. Never return an item without a tags array.
 ${pendingRules}
 ${outputFormat}
-${contextBlock}${clarificationsBlock}
+${contextBlock}${sortProfileBlock}${clarificationsBlock}
 Dump:
 """${dump}"""`;
 }

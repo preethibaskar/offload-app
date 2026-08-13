@@ -14,6 +14,11 @@ import { filterDuplicates, isDuplicateOfExisting } from "../lib/dedup";
 import { applyCapacityPlan } from "../lib/capacity";
 import { PREFERENCE_KEY, DEFAULT_PREFERENCES, normalizePreferences } from "../../shared/preferences.js";
 import { parseSortResponse, CLARIFY_OPTIONS } from "../../shared/sortPrompt.js";
+import {
+  SORT_PROFILE_KEY,
+  buildSortProfileFromCorrections,
+  inferCategoryFromAnswer,
+} from "../../shared/sortProfile.js";
 import PreferencesPanel from "./PreferencesPanel";
 
 const CATS = [
@@ -118,10 +123,37 @@ export default function Offload() {
   const [sortNudge, setSortNudge] = useState(null);
   const [sortClarification, setSortClarification] = useState(null);
   const [clarifyAnswers, setClarifyAnswers] = useState({});
+  const [sortProfile, setSortProfile] = useState({ rules: [], examples: [] });
   const loadIdRef = useRef(0);
   const dumpRef = useRef("");
   const itemsRef = useRef([]);
   const preferencesRef = useRef(DEFAULT_PREFERENCES);
+  const sortProfileRef = useRef({ rules: [], examples: [] });
+  const refreshProfileTimerRef = useRef(null);
+
+  const refreshSortProfile = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("corrections")
+        .select("item_text, ai_category, corrected_category")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      const profile = buildSortProfileFromCorrections(data || []);
+      setSortProfile(profile);
+      sortProfileRef.current = profile;
+      await storage.set(SORT_PROFILE_KEY, JSON.stringify(profile));
+    } catch (err) {
+      console.error("Failed to refresh sort profile:", err.message);
+    }
+  }, []);
+
+  const scheduleRefreshSortProfile = useCallback(() => {
+    if (refreshProfileTimerRef.current) clearTimeout(refreshProfileTimerRef.current);
+    refreshProfileTimerRef.current = setTimeout(() => {
+      void refreshSortProfile();
+    }, 600);
+  }, [refreshSortProfile]);
 
   // Fire-and-forget: writes to the `corrections` table (see supabase/schema.sql).
   const logCorrection = useCallback(({ text, aiCategory, correctedCategory }) => {
@@ -130,8 +162,24 @@ export default function Offload() {
       .insert({ item_text: text, ai_category: aiCategory, corrected_category: correctedCategory })
       .then(({ error }) => {
         if (error) console.error("Failed to log correction:", error.message);
+        else scheduleRefreshSortProfile();
       });
-  }, []);
+  }, [scheduleRefreshSortProfile]);
+
+  const logClarifications = useCallback((answers) => {
+    const rows = answers.map((a) => ({
+      item_text: a.raw,
+      ai_category: "pending",
+      corrected_category: inferCategoryFromAnswer(a.answer) || "week",
+    }));
+    supabase
+      .from("corrections")
+      .insert(rows)
+      .then(({ error }) => {
+        if (error) console.error("Failed to log clarification:", error.message);
+        else scheduleRefreshSortProfile();
+      });
+  }, [scheduleRefreshSortProfile]);
 
   useEffect(() => {
     dumpRef.current = dump;
@@ -144,6 +192,24 @@ export default function Offload() {
   useEffect(() => {
     preferencesRef.current = preferences;
   }, [preferences]);
+
+  useEffect(() => {
+    sortProfileRef.current = sortProfile;
+  }, [sortProfile]);
+
+  const loadSortProfile = useCallback(async () => {
+    try {
+      const cached = await storage.get(SORT_PROFILE_KEY);
+      if (cached?.value) {
+        const profile = JSON.parse(cached.value);
+        setSortProfile(profile);
+        sortProfileRef.current = profile;
+      }
+    } catch {
+      /* use empty profile */
+    }
+    void refreshSortProfile();
+  }, [refreshSortProfile]);
 
   const loadPreferences = useCallback(async () => {
     try {
@@ -158,6 +224,7 @@ export default function Offload() {
   }, []);
 
   useEffect(() => { loadPreferences(); }, [loadPreferences]);
+  useEffect(() => { loadSortProfile(); }, [loadSortProfile]);
 
   const savePreferences = useCallback(async (nextPrefs) => {
     const normalized = normalizePreferences(nextPrefs);
@@ -251,6 +318,7 @@ export default function Offload() {
             })),
           preferences: prefs,
           planDay: dateKey,
+          sortProfile: sortProfileRef.current,
         }),
       });
       if (!response.ok) {
@@ -317,8 +385,9 @@ export default function Offload() {
       return;
     }
     setError("");
+    logClarifications(answers);
     void runSortJob(sortClarification.dumpText, answers);
-  }, [sortClarification, clarifyAnswers, runSortJob]);
+  }, [sortClarification, clarifyAnswers, runSortJob, logClarifications]);
 
   const skipClarification = useCallback(() => {
     if (!sortClarification) return;

@@ -50,7 +50,7 @@ export default async function handler(req, res) {
     return res.status(429).json({ error: "Rate limit exceeded, try again later" });
   }
 
-  const { dump, existingItems, preferences, planDay, clarifications } = req.body || {};
+  const { dump, existingItems, preferences, planDay, clarifications, sortProfile } = req.body || {};
   if (!dump || !dump.trim()) {
     return res.status(400).json({ error: "Empty dump" });
   }
@@ -70,6 +70,7 @@ export default async function handler(req, res) {
     planDay,
     capacity,
     clarifications: clarificationsList?.length ? clarificationsList : null,
+    sortProfile: sortProfile?.rules?.length || sortProfile?.examples?.length ? sortProfile : null,
   });
 
   const anthropicKey = sanitizeEnvValue(process.env.ANTHROPIC_API_KEY);
